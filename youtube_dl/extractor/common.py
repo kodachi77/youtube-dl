@@ -1067,6 +1067,8 @@ class InfoExtractor(object):
             video_info['description'] = playlist_description
         return video_info
 
+    GROUP_ALL = '--ALL--'
+
     def _search_regex(self, pattern, string, name, default=NO_DEFAULT, fatal=True, flags=0, group=None):
         """
         Perform a regex search on the given string, using a single or a list of
@@ -1093,6 +1095,8 @@ class InfoExtractor(object):
                 return next(g for g in mobj.groups() if g is not None)
             elif isinstance(group, (list, tuple)):
                 return tuple(mobj.group(g) for g in group)
+            elif isinstance(group, str) and group == self.GROUP_ALL:
+                return mobj.groups()
             else:
                 return mobj.group(group)
         elif default is not NO_DEFAULT:

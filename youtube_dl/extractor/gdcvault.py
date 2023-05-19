@@ -1,6 +1,7 @@
 from __future__ import unicode_literals
 
 import re
+import urllib
 
 from .common import InfoExtractor
 from .kaltura import KalturaIE
@@ -18,7 +19,7 @@ class GDCVaultIE(InfoExtractor):
     _NETRC_MACHINE = 'gdcvault'
     _TESTS = [
         {
-            'url': 'http://www.gdcvault.com/play/1019721/Doki-Doki-Universe-Sweet-Simple',
+            'url': 'https://www.gdcvault.com/play/1019721/Doki-Doki-Universe-Sweet-Simple',
             'md5': '7ce8388f544c88b7ac11c7ab1b593704',
             'info_dict': {
                 'id': '201311826596_AWNY',
@@ -28,7 +29,7 @@ class GDCVaultIE(InfoExtractor):
             }
         },
         {
-            'url': 'http://www.gdcvault.com/play/1015683/Embracing-the-Dark-Art-of',
+            'url': 'https://www.gdcvault.com/play/1015683/Embracing-the-Dark-Art-of',
             'info_dict': {
                 'id': '201203272_1330951438328RSXR',
                 'display_id': 'Embracing-the-Dark-Art-of',
@@ -40,7 +41,7 @@ class GDCVaultIE(InfoExtractor):
             }
         },
         {
-            'url': 'http://www.gdcvault.com/play/1015301/Thexder-Meets-Windows-95-or',
+            'url': 'https://www.gdcvault.com/play/1015301/Thexder-Meets-Windows-95-or',
             'md5': 'a5eb77996ef82118afbbe8e48731b98e',
             'info_dict': {
                 'id': '1015301',
@@ -51,12 +52,12 @@ class GDCVaultIE(InfoExtractor):
             'skip': 'Requires login',
         },
         {
-            'url': 'http://gdcvault.com/play/1020791/',
+            'url': 'https://gdcvault.com/play/1020791/',
             'only_matching': True,
         },
         {
             # Hard-coded hostname
-            'url': 'http://gdcvault.com/play/1023460/Tenacious-Design-and-The-Interface',
+            'url': 'https://gdcvault.com/play/1023460/Tenacious-Design-and-The-Interface',
             'md5': 'a8efb6c31ed06ca8739294960b2dbabd',
             'info_dict': {
                 'id': '840376_BQRC',
@@ -67,7 +68,7 @@ class GDCVaultIE(InfoExtractor):
         },
         {
             # Multiple audios
-            'url': 'http://www.gdcvault.com/play/1014631/Classic-Game-Postmortem-PAC',
+            'url': 'https://www.gdcvault.com/play/1014631/Classic-Game-Postmortem-PAC',
             'info_dict': {
                 'id': '12396_1299111843500GMPX',
                 'ext': 'mp4',
@@ -80,7 +81,7 @@ class GDCVaultIE(InfoExtractor):
         },
         {
             # gdc-player.html
-            'url': 'http://www.gdcvault.com/play/1435/An-American-engine-in-Tokyo',
+            'url': 'https://www.gdcvault.com/play/1435/An-American-engine-in-Tokyo',
             'info_dict': {
                 'id': '9350_1238021887562UHXB',
                 'display_id': 'An-American-engine-in-Tokyo',
@@ -120,7 +121,7 @@ class GDCVaultIE(InfoExtractor):
         },
         {
             # HTML5 video
-            'url': 'http://www.gdcvault.com/play/1014846/Conference-Keynote-Shigeru',
+            'url': 'https://www.gdcvault.com/play/1014846/Conference-Keynote-Shigeru',
             'only_matching': True,
         },
     ]
@@ -148,11 +149,61 @@ class GDCVaultIE(InfoExtractor):
 
         return start_page
 
+    def _split_url(self, url):
+        parsed_url = urllib.parse.urlparse(url)
+        root_url = parsed_url.netloc
+        params = urllib.parse.parse_qs(parsed_url.query)
+        for key in params:
+            params[key] = params[key][0]
+
+        return {'root_url': root_url, 'params': params}
+    def _parse_blazestreaming_media_entry(self, base_url, webpage, video_id):
+        video_title = self._og_search_title(
+            webpage, default=None) or self._html_search_regex(
+            r'(?s)<title>(.*?)</title>', webpage, 'video title',
+            default='video')
+
+        cookies = self._get_cookies('https://www.gdcvault.com')
+        ret = {'video_title': video_title}
+
+        iframe_url = self._search_regex(
+            r'<iframe src="(.*blazestreaming\.com/\?id=[a-fzA-F0-9]+&videoid=[a-fzA-F0-9]+)".*?</iframe>',
+            webpage, 'video id', default=None, fatal=False)
+        if iframe_url:
+            split_url = self._split_url(iframe_url)
+            user_hash = self._get_cookie_value(cookies, 'user_hash')
+            if user_hash:
+                self._set_cookie(split_url['root_url'], 'user_hash', user_hash)
+
+            iframe_page = self._download_webpage(iframe_url, video_id, fatal=True)
+            # this function will raise an exception if JS script is not found
+            self._search_regex(r'<script\s+src="(\./script_VOD.js)">', iframe_page, 'script_VOD.js', fatal=False,
+                               flags=re.IGNORECASE)
+
+            script_request = sanitized_Request("https://{0}/{1}".format(split_url['root_url'], 'script_VOD.js'))
+            script_src = self._download_webpage(script_request, video_id, fatal=True)
+            script_match = self._search_regex(
+                    r'PLAYBACK_URL\s*=\s*[\'|"](.+)[\'|"]\s*\+\s*videoId\s*\+\s*[\'|"](.*)[\'|"]', script_src,
+                    'script_VOD.js', fatal=True, flags=re.IGNORECASE, group=self.GROUP_ALL)
+
+            url_base = script_match[0]
+            url_postfix = script_match[1]
+            embed_url = "{0}{1}{2}".format(url_base, split_url['params']['id'], url_postfix)
+            ret['embed_url'] = embed_url
+            ret['display_id'] = split_url['params']['videoid']
+
+        return ret
+    @staticmethod
+    def _get_cookie_value(cookies, name):
+        cookie = cookies.get(name)
+        if cookie:
+            return cookie.value
+
     def _real_extract(self, url):
         video_id, name = re.match(self._VALID_URL, url).groups()
         display_id = name or video_id
 
-        webpage_url = 'http://www.gdcvault.com/play/' + video_id
+        webpage_url = 'https://www.gdcvault.com/play/' + video_id
         start_page = self._download_webpage(webpage_url, display_id)
 
         direct_url = self._search_regex(
@@ -162,7 +213,7 @@ class GDCVaultIE(InfoExtractor):
             title = self._html_search_regex(
                 r'<td><strong>Session Name:?</strong></td>\s*<td>(.*?)</td>',
                 start_page, 'title')
-            video_url = 'http://www.gdcvault.com' + direct_url
+            video_url = 'https://www.gdcvault.com' + direct_url
             # resolve the url so that we can detect the correct extension
             video_url = self._request_webpage(
                 HEADRequest(video_url), video_id).geturl()
@@ -192,29 +243,45 @@ class GDCVaultIE(InfoExtractor):
                     start_page = login_res
                     # Grab the url from the authenticated page
                     xml_root = self._html_search_regex(
-                        PLAYER_REGEX, start_page, 'xml root')
+                        PLAYER_REGEX, start_page, 'xml root', default=None, fatal=False)
 
             xml_name = self._html_search_regex(
                 r'<iframe src=".*?\?xml(?:=|URL=xml/)(.+?\.xml).*?".*?</iframe>',
-                start_page, 'xml filename', default=None)
-            if not xml_name:
-                info = self._parse_html5_media_entries(url, start_page, video_id)[0]
-                info.update({
-                    'title': remove_start(self._search_regex(
-                        r'>Session Name:\s*<.*?>\s*<td>(.+?)</td>', start_page,
-                        'title', default=None) or self._og_search_title(
-                        start_page, default=None), 'GDC Vault - '),
-                    'id': video_id,
-                    'display_id': display_id,
-                })
-                return info
-            embed_url = '%s/xml/%s' % (xml_root, xml_name)
-            ie_key = 'DigitallySpeaking'
+                start_page, 'xml filename', default=None, fatal=False)
 
+            if xml_root and xml_name:
+                embed_url = '%s/xml/%s' % (xml_root, xml_name)
+                ie_key = 'DigitallySpeaking'
+            else:
+                res = self._parse_html5_media_entries(url, start_page, video_id)
+                if len(res) > 0:
+                    info = res[0]
+                    info.update({
+                        'title': remove_start(self._search_regex(
+                            r'>Session Name:\s*<.*?>\s*<td>(.+?)</td>', start_page,
+                            'title', default=None) or self._og_search_title(
+                            start_page, default=None), 'GDC Vault - '),
+                        'id': video_id,
+                        'display_id': display_id,
+                    })
+                    return info
+                else:
+                    ret = self._parse_blazestreaming_media_entry(url, start_page, video_id)
+                    if ret:
+                        return {
+                            #'_type': 'url_transparent',
+                            'id': video_id,
+                            'display_id': ret['display_id'],
+                            'url': ret['embed_url'],
+                            'title': ret['video_title'],
+                            'ie_key': 'BlazeStreaming'
+                        }
         return {
             '_type': 'url_transparent',
             'id': video_id,
             'display_id': display_id,
             'url': embed_url,
-            'ie_key': ie_key,
+            'ie_key': ie_key
         }
+
+
