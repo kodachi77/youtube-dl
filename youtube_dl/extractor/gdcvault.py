@@ -163,7 +163,6 @@ class GDCVaultIE(InfoExtractor):
             r'(?s)<title>(.*?)</title>', webpage, 'video title',
             default='video')
 
-        cookies = self._get_cookies('https://www.gdcvault.com')
         ret = {'video_title': video_title}
 
         iframe_url = self._search_regex(
@@ -171,9 +170,6 @@ class GDCVaultIE(InfoExtractor):
             webpage, 'video id', default=None, fatal=False)
         if iframe_url:
             split_url = self._split_url(iframe_url)
-            user_hash = self._get_cookie_value(cookies, 'user_hash')
-            if user_hash:
-                self._set_cookie(split_url['root_url'], 'user_hash', user_hash)
 
             iframe_page = self._download_webpage(iframe_url, video_id, fatal=True)
             # this function will raise an exception if JS script is not found
@@ -269,8 +265,8 @@ class GDCVaultIE(InfoExtractor):
                     ret = self._parse_blazestreaming_media_entry(url, start_page, video_id)
                     if ret:
                         return {
-                            #'_type': 'url_transparent',
                             'id': video_id,
+                            'ext': 'mp4',
                             'display_id': ret['display_id'],
                             'url': ret['embed_url'],
                             'title': ret['video_title'],
