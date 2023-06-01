@@ -10,7 +10,7 @@ from ..utils import (
     remove_start,
     sanitized_Request,
     smuggle_url,
-    urlencode_postdata,
+    urlencode_postdata, ExtractorError,
 )
 
 
@@ -163,13 +163,17 @@ class GDCVaultIE(InfoExtractor):
             r'(?s)<title>(.*?)</title>', webpage, 'video title',
             default='video')
 
-        ret = {'video_title': video_title}
+        ret = None
 
         iframe_url = self._search_regex(
-            r'<iframe src="(.*blazestreaming\.com/\?id=[a-fzA-F0-9]+&videoid=[a-fzA-F0-9]+)".*?</iframe>',
+            r'<iframe src="(.*blazestreaming\.com/\?[^"]+)".*?</iframe>',
             webpage, 'video id', default=None, fatal=False)
         if iframe_url:
             split_url = self._split_url(iframe_url)
+            if not split_url['params'].get('id', None):
+                raise ExtractorError("Cannot find 'id' parameter.")
+            if not split_url['params'].get('videoid', None):
+                split_url['params']['videoid'] = video_id
 
             iframe_page = self._download_webpage(iframe_url, video_id, fatal=True)
             # this function will raise an exception if JS script is not found
@@ -185,8 +189,8 @@ class GDCVaultIE(InfoExtractor):
             url_base = script_match[0]
             url_postfix = script_match[1]
             embed_url = "{0}{1}{2}".format(url_base, split_url['params']['id'], url_postfix)
-            ret['embed_url'] = embed_url
-            ret['display_id'] = split_url['params']['videoid']
+
+            ret = {'video_title': video_title, 'embed_url': embed_url, 'display_id': split_url['params']['videoid']}
 
         return ret
     @staticmethod
@@ -196,11 +200,24 @@ class GDCVaultIE(InfoExtractor):
             return cookie.value
 
     def _real_extract(self, url):
+        res = self._extract_internal(url, False)
+        if not res:
+            res = self._extract_internal(url, True)
+        return res
+
+    def _extract_internal(self, url, need_login):
         video_id, name = re.match(self._VALID_URL, url).groups()
         display_id = name or video_id
 
         webpage_url = 'https://www.gdcvault.com/play/' + video_id
-        start_page = self._download_webpage(webpage_url, display_id)
+        if need_login:
+            login_res = self._login(webpage_url, display_id)
+            if login_res is None:
+                raise ExtractorError('Could not login.')
+            else:
+                start_page = login_res
+        else:
+            start_page = self._download_webpage(webpage_url, display_id)
 
         direct_url = self._search_regex(
             r's1\.addVariable\("file",\s*encodeURIComponent\("(/[^"]+)"\)\);',
@@ -230,16 +247,6 @@ class GDCVaultIE(InfoExtractor):
 
             xml_root = self._html_search_regex(
                 PLAYER_REGEX, start_page, 'xml root', default=None)
-            if xml_root is None:
-                # Probably need to authenticate
-                login_res = self._login(webpage_url, display_id)
-                if login_res is None:
-                    self.report_warning('Could not login.')
-                else:
-                    start_page = login_res
-                    # Grab the url from the authenticated page
-                    xml_root = self._html_search_regex(
-                        PLAYER_REGEX, start_page, 'xml root', default=None, fatal=False)
 
             xml_name = self._html_search_regex(
                 r'<iframe src=".*?\?xml(?:=|URL=xml/)(.+?\.xml).*?".*?</iframe>',
@@ -250,7 +257,7 @@ class GDCVaultIE(InfoExtractor):
                 ie_key = 'DigitallySpeaking'
             else:
                 res = self._parse_html5_media_entries(url, start_page, video_id)
-                if len(res) > 0:
+                if res and isinstance(res, list) and len(res) > 0:
                     info = res[0]
                     info.update({
                         'title': remove_start(self._search_regex(
@@ -262,22 +269,24 @@ class GDCVaultIE(InfoExtractor):
                     })
                     return info
                 else:
-                    ret = self._parse_blazestreaming_media_entry(url, start_page, video_id)
-                    if ret:
+                    res = self._parse_blazestreaming_media_entry(url, start_page, video_id)
+                    if res and isinstance(res, dict):
                         return {
                             'id': video_id,
                             'ext': 'mp4',
-                            'display_id': ret['display_id'],
-                            'url': ret['embed_url'],
-                            'title': ret['video_title'],
+                            'display_id': res['display_id'],
+                            'url': res['embed_url'],
+                            'title': res['video_title'],
                             'ie_key': 'BlazeStreaming'
                         }
-        return {
-            '_type': 'url_transparent',
-            'id': video_id,
-            'display_id': display_id,
-            'url': embed_url,
-            'ie_key': ie_key
-        }
+        if embed_url:
+            return {
+                '_type': 'url_transparent',
+                'id': video_id,
+                'display_id': display_id,
+                'url': embed_url,
+                'ie_key': ie_key
+            }
 
+        return None
 
