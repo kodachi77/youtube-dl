@@ -133,8 +133,9 @@ class GDCVaultIE(InfoExtractor):
             return None
 
         mobj = re.match(r'(?P<root_url>https?://.*?/).*', webpage_url)
-        login_url = mobj.group('root_url') + 'api/login.php'
-        logout_url = mobj.group('root_url') + 'logout'
+        root_url = mobj.group('root_url').replace('www.', '')
+        login_url = root_url + 'api/login.php'
+        logout_url = root_url + 'logout'
 
         login_form = {
             'email': username,
@@ -143,7 +144,8 @@ class GDCVaultIE(InfoExtractor):
 
         request = sanitized_Request(login_url, urlencode_postdata(login_form))
         request.add_header('Content-Type', 'application/x-www-form-urlencoded')
-        self._download_webpage(request, display_id, 'Logging in')
+        self._download_json(request, display_id, 'Logging in',
+                            errnote='Login failed. Check --username and --password or --netrc.')
         start_page = self._download_webpage(webpage_url, display_id, 'Getting authenticated video page')
         self._download_webpage(logout_url, display_id, 'Logging out')
 
@@ -166,7 +168,7 @@ class GDCVaultIE(InfoExtractor):
         ret = None
 
         iframe_url = self._search_regex(
-            r'<iframe src="(.*blazestreaming\.com/\?[^"]+)".*?</iframe>',
+            r'<iframe[^>]+src="(.*blazestreaming\.com/\?[^"]+)"',
             webpage, 'video id', default=None, fatal=False)
         if iframe_url:
             split_url = self._split_url(iframe_url)
@@ -177,8 +179,8 @@ class GDCVaultIE(InfoExtractor):
 
             iframe_page = self._download_webpage(iframe_url, video_id, fatal=True)
             # this function will raise an exception if JS script is not found
-            self._search_regex(r'<script\s+src="(\./script_VOD.js)">', iframe_page, 'script_VOD.js', fatal=False,
-                               flags=re.IGNORECASE)
+            self._search_regex(r'<script[^>]+src="(\./script_VOD.js)">', iframe_page, 'script_VOD.js',
+                               fatal=True, flags=re.IGNORECASE)
 
             script_request = sanitized_Request("https://{0}/{1}".format(split_url['root_url'], 'script_VOD.js'))
             script_src = self._download_webpage(script_request, video_id, fatal=True)
@@ -200,7 +202,9 @@ class GDCVaultIE(InfoExtractor):
             return cookie.value
 
     def _real_extract(self, url):
-        res = self._extract_internal(url, False)
+        username, password = self._get_login_info()
+        need_login = username is not None and password is not None
+        res = self._extract_internal(url, need_login)
         if not res:
             res = self._extract_internal(url, True)
         return res
